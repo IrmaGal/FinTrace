@@ -3,9 +3,11 @@
 **Duboko učenje za otkrivanje složenih mreža finansijskih anomalija**  
 Projekt iz predmeta *Metode primjene vještačke inteligencije (MPVI)*.
 
-FinGraph AI istražuje detekciju nedozvoljenih finansijskih transakcija u grafu i utjecaj mrežnih odnosa na kvalitet predikcija. Na Elliptic++ datasetu upoređuju se XGBoost, višeslojna neuronska mreža (MLP) i GraphSAGE. Eksperimenti koriste hronološku podjelu podataka kako bi se provjerilo koliko se naučeni obrasci prenose na kasnije vremenske periode.
+FinGraph AI istražuje mogućnost detekcije nezakonitih Bitcoin transakcija primjenom mašinskog i dubokog učenja nad grafovskim podacima. Na Elliptic++ skupu podataka upoređuju se XGBoost, višeslojna neuronska mreža (MLP) i GraphSAGE, s ciljem ispitivanja doprinosa mrežne strukture, karakteristika transakcija i postupaka predobrade kvalitetu klasifikacije.
 
-**Trenutni status:** završene početne implementacije i evaluacije XGBoost, GraphSAGE i MLP modela, eksplorativna analiza podataka (EDA), vremenska evaluacija (faza 02) i dijagnostička analiza vremenske generalizacije modela (faza 03). U posljednjoj fazi analizirane su promjene distribucija karakteristika, predikcijski skorovi, klasifikacijski pragovi, kalibracija, grafovska struktura i visokorizični podgrafovi. Modeli su dodatno trenirani na tri hronološke podjele. Sljedeća faza obuhvata ablacijske eksperimente, alternativne postupke predobrade i optimizaciju hiperparametara.
+Poseban fokus istraživanja jeste **vremenska generalizacija modela**, odnosno njihova sposobnost prepoznavanja nezakonitih transakcija u kasnijim vremenskim periodima.
+
+**Trenutni status:** završeno je pet eksperimenata koji obuhvataju početno treniranje i poređenje modela, eksplorativnu analizu podataka, vremensku evaluaciju, dijagnostiku promjena distribucija te sistematsku optimizaciju ulaznih karakteristika, predobrade i hiperparametara. Završna evaluacija pokazala je značajno poboljšanje MLP i GraphSAGE modela, ali i potvrdila da problem generalizacije nakon vremenskog koraka 42 ostaje otvoren.
 
 ## Dataset
 
@@ -15,17 +17,41 @@ Koristi se [Elliptic++ Transactions Dataset](https://github.com/git-disl/Ellipti
 |---|---:|
 | Transakcije (čvorovi) | 203.769 |
 | Usmjerene veze | 234.355 |
-| Ulazne karakteristike korištene u modelima | 182 |
+| Ulazne karakteristike | 182 |
 | Vremenski koraci | 49 |
-| Illicit | 4.545 |
-| Licit | 42.019 |
-| Unknown | 157.205 |
+| Illicit transakcije | 4.545 |
+| Licit transakcije | 42.019 |
+| Unknown transakcije | 157.205 |
 
-Oznake u izvornim datotekama su `1 = illicit`, `2 = licit` i `3 = unknown`; interni kod ih mapira na `1`, `0` i `-1`. Transakcije s nepoznatom oznakom ne koriste se kao negativni primjeri. Mogu se koristiti kao neoznačeni čvorovi u grafovskom kontekstu.
+Izvorne oznake `1 = illicit`, `2 = licit` i `3 = unknown` interno se mapiraju na `1`, `0` i `-1`.
 
-Podaci su podijeljeni hronološki: **trening 1–34**, **validacija 35–41** i **test 42–49**. Evaluacija se provodi nad 8.841 poznato označenom testnom transakcijom. Pragovi za klasifikaciju biraju se na validacijskom skupu.
+Transakcije s nepoznatom oznakom ne koriste se kao negativni primjeri, ali mogu učestvovati kao neoznačeni čvorovi u grafovskom kontekstu.
 
-Originalni CSV podaci preuzimaju se iz [foldera autora](https://drive.google.com/drive/folders/1MRPXz79Lu_JGLlJ21MDfML44dKN9R08l?usp=sharing) i smještaju u `data/raw/`:
+### Vremenska podjela
+
+Osnovna hronološka podjela:
+
+| Skup | Vremenski koraci | Označene transakcije | Illicit |
+|---|---|---:|---:|
+| Trening | 1–34 | 29.894 | 3.462 |
+| Validacija | 35–41 | 7.829 | 675 |
+| Test | 42–49 | 8.841 | 408 |
+
+Za razvoj i optimizaciju modela koriste se dodatne hronološke podjele:
+
+| Podjela | Trening | Validacija |
+|---|---|---|
+| A | 1–20 | 21–27 |
+| B | 1–27 | 28–34 |
+| C | 1–34 | 35–41 |
+
+Sve transformacije podataka prilagođavaju se isključivo trening periodu. Klasifikacijski pragovi i najbolja epoha neuronskih modela biraju se na validacijskim podacima.
+
+**Napomena:** originalni testni period 42–49 već je analiziran tokom prethodnih eksperimenata. Zbog toga kasnija poređenja na tom periodu predstavljaju retrospektivnu evaluaciju, a ne potpuno nezavisnu potvrdu generalizacije.
+
+### Priprema podataka
+
+Originalni CSV podaci preuzimaju se iz [foldera autora Elliptic++ skupa](https://drive.google.com/drive/folders/1MRPXz79Lu_JGLlJ21MDfML44dKN9R08l?usp=sharing) i smještaju u `data/raw/`:
 
 ```text
 data/raw/
@@ -34,90 +60,224 @@ data/raw/
 └── txs_edgelist.csv
 ```
 
-Sirovi podaci nisu uključeni u repozitorij.
+Sirovi podaci nisu uključeni u Git repozitorij.
 
 ## Implementacija
 
+Projekat je organizovan kao Python paket `fingraph`.
+
 | Komponenta | Opis |
 |---|---|
-| `data.py`, `audit.py` | Učitavanje, provjera integriteta i pregled dataseta |
-| `splits.py` | Hronološka podjela i vremensko filtriranje veza |
-| `baseline.py` | XGBoost referentni model |
-| `gnn.py` | GraphSAGE sa dva grafovska sloja |
-| `mlp.py` | MLP kontrolni model bez eksplicitnog korištenja `edge_index` |
+| `data.py`, `audit.py` | Učitavanje, provjera integriteta i eksplorativni pregled podataka |
+| `splits.py` | Hronološka podjela podataka i vremensko filtriranje grafovskih veza |
+| `baseline.py` | Referentni XGBoost model |
+| `gnn.py` | Dvoslojni GraphSAGE model |
+| `mlp.py` | MLP model bez eksplicitne propagacije kroz graf |
 | `metrics.py` | PR-AUC, ROC-AUC, precision, recall, F1 i top-k metrike |
-| `temporal.py` | Provjera spremljenih predikcija i evaluacija po vremenskim koracima |
+| `temporal.py` | Evaluacija i poređenje predikcija po vremenskim koracima |
+| `phase05.py` | Ablacija karakteristika, predobrada i eksperimentalne konfiguracije |
+| `phase05_stage_C.py` | Kombinovanje konfiguracija, analiza stabilnosti i podešavanje hiperparametara |
 
-Eksperimenti su izvedeni u Google Colabu uz Python, PyTorch, PyTorch Geometric, scikit-learn i XGBoost. Imputacija nedostajućih vrijednosti i skaliranje prilagođavaju se podacima iz trening perioda.
+Završna evaluacija petog eksperimenta implementirana je direktno u odgovarajućem Colab notebooku.
 
-### Notebooks
+Eksperimenti se izvode u **Google Colabu**, koristeći Python, PyTorch, PyTorch Geometric, scikit-learn i XGBoost.
+
+### Notebookovi
 
 | Notebook | Sadržaj |
 |---|---|
-| `00_colab_quickstart.ipynb` | Početna verzija okruženja i eksperimenata |
-| `01_colab_quickstart.ipynb` | Izvršena verzija: audit dataseta, XGBoost i GraphSAGE |
-| `01_eda_and_results_analysis.ipynb` | Raspodjela klasa, karakteristike, vremenski koraci i struktura grafa |
-| `02_temporal_evaluation_and_baselines.ipynb` | Evaluacija po vremenu, treniranje MLP-a i poređenje tri modela |
-| `03_phase04_diagnostics.ipynb` | Dijagnostika vremenske generalizacije, promjena karakteristika, kalibracije i grafovske strukture te ponovno treniranje na različitim hronološkim podjelama |
+| `00_colab_quickstart.ipynb` | Početna verzija okruženja |
+| `01_colab_quickstart.ipynb` | Audit dataseta i početni XGBoost i GraphSAGE modeli |
+| `01_eda_and_results_analysis.ipynb` | Eksplorativna analiza podataka i početnih rezultata |
+| `02_temporal_evaluation_and_baselines.ipynb` | MLP i vremenska evaluacija tri modela |
+| `03_phase04_diagnostics.ipynb` | Dijagnostika vremenske generalizacije i dodatne hronološke podjele |
+| `04_phase05_ablation_preprocessing_tuning.ipynb` | Ablacija karakteristika, predobrada, tuning, stabilnost i završna testna evaluacija |
+
+## Pregled eksperimenata
+
+### Eksperiment 1 — početni modeli
+
+Implementirani su XGBoost i GraphSAGE, uz hronološku podjelu podataka.
+
+XGBoost koristi numeričke karakteristike transakcija, dok GraphSAGE dodatno koristi informacije iz njihovog grafovskog susjedstva.
+
+Na originalnom testnom periodu XGBoost je ostvario PR-AUC od **0,5675**, a GraphSAGE **0,3891**.
+
+### Eksperiment 2 — eksplorativna analiza podataka
+
+Provedena je analiza raspodjele klasa, nedostajućih vrijednosti, numeričkih karakteristika, vremenskih promjena i strukture transakcijskog grafa.
+
+Utvrđena je izražena neravnoteža klasa i promjenjiva zastupljenost nezakonitih transakcija kroz vrijeme.
+
+Također je potvrđeno da se svih 234.355 transakcijskih veza nalazi unutar pojedinačnih vremenskih koraka, bez direktnih veza između različitih perioda.
+
+### Eksperiment 3 — MLP i vremenska evaluacija
+
+Implementiran je MLP kao dodatni referentni neuronski model.
+
+Sva tri modela analizirana su na istim testnim transakcijama, uz evaluaciju po pojedinačnim vremenskim koracima.
+
+Rezultati su pokazali da modeli najveći dio nezakonitih transakcija prepoznaju u koraku 42, dok se nakon tog koraka uspješnost značajno smanjuje.
+
+### Eksperiment 4 — dijagnostika vremenske generalizacije
+
+Detaljnije su analizirani:
+
+- promjene distribucija karakteristika kroz vrijeme;
+- predikcijski skorovi i klasifikacijski pragovi;
+- Precision@K i Recall@K;
+- kalibracija predikcija;
+- grafovska struktura i visokorizični podgrafovi;
+- stabilnost početnih modela na dodatnim hronološkim podjelama.
+
+Posebno je značajan nalaz da kod nezakonitih transakcija **150 od 182 karakteristike** ima Kolmogorov–Smirnov statistiku veću od 0,2 pri poređenju trening perioda i koraka 43–49.
+
+Ovaj rezultat ukazuje na izražene promjene karakteristika pozitivne klase (*distribution shift*), koje mogu doprinositi slabijoj generalizaciji.
+
+Dodatne hronološke evaluacije pokazale su značajne oscilacije rezultata između vremenskih perioda.
+
+### Eksperiment 5 — ablacija, predobrada i optimizacija modela
+
+Peti eksperiment usmjeren je na sistematsko poboljšanje XGBoost, MLP i GraphSAGE modela na osnovu nalaza prethodnih eksperimenata.
+
+Obuhvata četiri povezane faze.
+
+#### Faza A — ablacijska analiza karakteristika
+
+Ispitan je doprinos različitih skupova ulaznih karakteristika:
+
+- sve 182 karakteristike;
+- karakteristike bez agregiranih;
+- samo lokalne karakteristike;
+- samo agregirane karakteristike;
+- samo dodatne imenovane karakteristike;
+- PCA transformacija s najmanje 95% objašnjene varijanse.
+
+Izvedena su 54 treniranja na tri hronološke podjele.
+
+XGBoost i GraphSAGE ostvarili su najbolje prosječne rezultate sa svim karakteristikama, dok je MLP uz standardnu predobradu pokazao značajno poboljšanje nakon uklanjanja agregiranih karakteristika.
+
+PCA nije poboljšala rezultate nijednog modela.
+
+#### Faza B — alternativni postupci predobrade
+
+Upoređeni su StandardScaler, RobustScaler, selektivna logaritamska transformacija, QuantileTransformer i PowerTransformer (Yeo–Johnson).
+
+Izvedeno je 36 dodatnih treniranja.
+
+Najvažniji rezultat jeste značajno poboljšanje neuronskih modela primjenom **kvantilske transformacije**.
+
+| Model | Standardna predobrada | Kvantilska transformacija |
+|---|---:|---:|
+| XGBoost | 0,9276 | 0,9279 |
+| MLP | 0,6960 | **0,9030** |
+| GraphSAGE | 0,6673 | **0,8587** |
+
+Vrijednosti predstavljaju prosječni validacijski PR-AUC kroz tri hronološke podjele.
+
+XGBoost je pokazao relativno malu osjetljivost na izbor predobrade, dok je kod neuronskih modela odgovarajuća transformacija numeričkih karakteristika bila jedan od ključnih faktora poboljšanja.
+
+#### Faza C — kombinovanje konfiguracija i podešavanje hiperparametara
+
+Najperspektivnije kombinacije karakteristika i predobrade evaluirane su kroz tri hronološke podjele i tri seed vrijednosti (`42`, `123`, `2026`).
+
+Prvo je provedeno 81 treniranje radi poređenja kombinacija i stabilnosti rezultata, nakon čega je izvedeno 108 treniranja za ciljano podešavanje hiperparametara.
+
+Najbolje razvojne konfiguracije:
+
+| Model | Konfiguracija | Prosječni PR-AUC |
+|---|---|---:|
+| XGBoost | Sve karakteristike, standardna predobrada, početni hiperparametri | 0,9277 |
+| MLP | Sve karakteristike, kvantilska transformacija, smanjena težina pozitivne klase i duže treniranje | **0,9102** |
+| GraphSAGE | Sve karakteristike, kvantilska transformacija, dva sloja i duže treniranje | **0,8982** |
+| GraphSAGE (alternativa) | Sve karakteristike, kvantilska transformacija, tri sloja i duže treniranje | 0,8993 |
+
+Kod MLP-a najbolje rezultate donijela je kombinacija dužeg treniranja i smanjene težine pozitivne klase.
+
+Kod GraphSAGE-a najznačajnije poboljšanje ostvareno je produžavanjem treniranja sa 60 na 120 epoha. Troslojna arhitektura postigla je neznatno veći razvojni PR-AUC, ali je dvoslojni model pokazao dosljednije poboljšanje kroz ponovljena treniranja.
+
+Dodatno podešavanje XGBoost modela nije donijelo uvjerljivo poboljšanje u odnosu na početnu konfiguraciju.
+
+#### Faza C.4 — završna testna evaluacija
+
+Odabrane konfiguracije evaluirane su na originalnom testnom periodu 42–49, koristeći tri seed vrijednosti.
+
+Ukupno je provedeno 12 završnih treniranja, uključujući dodatnu troslojnu GraphSAGE konfiguraciju.
+
+Rezultati su upoređeni sa sačuvanim predikcijama početnih modela, bez ponovnog treniranja prethodnih referentnih verzija.
 
 ## Rezultati modela
 
-Sva tri modela evaluirana su na istom testnom skupu. Navedene vrijednosti potiču iz izvršenih Colab eksperimenata sa `seed=42`.
+### Početni i optimizovani modeli
 
-| Model | PR-AUC | ROC-AUC | Precision | Recall | F1 |
-|---|---:|---:|---:|---:|---:|
-| XGBoost | **0,5675** | **0,8718** | **0,8442** | **0,4779** | **0,6103** |
-| GraphSAGE | 0,3891 | 0,7876 | 0,4441 | 0,3603 | 0,3978 |
-| MLP | 0,3707 | 0,8253 | 0,3271 | 0,4706 | 0,3859 |
+Sljedeća tabela prikazuje rezultate na originalnom testnom periodu 42–49.
 
-XGBoost trenutno ostvaruje najbolji rezultat prema primarnoj metrici PR-AUC. GraphSAGE ostvaruje nešto viši PR-AUC od MLP-a, ali na osnovu jednog pokretanja nije moguće tvrditi da je razlika stabilna ili statistički značajna. MLP je najbolji validacijski PR-AUC (0,7294) ostvario u 28. epohi; treniranje je završilo u 48. epohi primjenom *early stoppinga*.
+| Model | Početni PR-AUC | Nakon eksperimenta 5 | Promjena |
+|---|---:|---:|---:|
+| XGBoost | 0,5675 | 0,5634 | −0,0041 |
+| MLP | 0,3707 | **0,5500** | **+0,1793** |
+| GraphSAGE (2 sloja) | 0,3891 | **0,5368** | **+0,1477** |
+| GraphSAGE (3 sloja) | 0,3891 | 0,5352 | +0,1461 |
 
-### Nalaz iz vremenske evaluacije
+Početne vrijednosti potiču iz ranijih pojedinačnih treniranja, dok optimizovane vrijednosti predstavljaju prosjek tri seed vrijednosti.
 
-U testnom koraku **42** nalazi se 239 pozitivno označenih transakcija. Pri validacijskim pragovima XGBoost ih otkriva 192, GraphSAGE 145, a MLP 185. U preostalim koracima **43–49**, od 169 pozitivnih primjera, modeli otkrivaju samo 3, 2 i 7 transakcija, istim redoslijedom.
+MLP je ostvario relativno poboljšanje testnog PR-AUC od približno **48,4%**, a dvoslojni GraphSAGE približno **38,0%**.
 
-Ovakva razlika upućuje na izraženu nestabilnost detekcije kroz vrijeme. Udio pozitivnih primjera pada sa 11,58% u treningu na 4,61% u testu, ali sama promjena udjela klase nije dovoljno objašnjenje. Naredni eksperimenti trebaju razdvojiti kvalitet rangiranja, kalibraciju skorova, izbor praga i promjenu distribucije karakteristika.
+XGBoost je zadržao približno početni rezultat i ostao model s najvećim ukupnim testnim PR-AUC.
 
-**Ograničenja:** PR-AUC se mijenja s udjelom pozitivne klase, naročito u koracima s vrlo malo pozitivnih primjera. Elliptic++ sadrži unaprijed izračunate agregirane karakteristike pa MLP i XGBoost nisu potpuno bez mrežnih informacija. Trenutni GraphSAGE prilikom propagacije poruka tretira veze dvosmjerno. Evaluacija se odnosi na oznake transakcija, ne na potvrđene kriminalne grupe ili kompletne podgrafove. Testni rezultati već su korišteni za eksplorativnu analizu; budući hiperparametri birat će se isključivo na validaciji.
+### Završne klasifikacijske metrike
 
-Dodatne hronološke validacije potvrdile su značajne razlike u uspješnosti modela između vremenskih perioda, ali ne predstavljaju nezavisnu potvrdu generalizacije na buduće podatke. U narednim eksperimentima izbor konfiguracija zasnivat će se na razvojnim vremenskim podjelama, bez optimizacije prema prethodno analiziranim testnim koracima 42–49.
+| Model | Precision | Recall | F1 |
+|---|---:|---:|---:|
+| XGBoost | 0,8887 | 0,4730 | **0,6173** |
+| MLP | **0,9051** | 0,4641 | 0,6134 |
+| GraphSAGE (2 sloja) | 0,7952 | 0,4616 | 0,5840 |
+| GraphSAGE (3 sloja) | 0,7789 | 0,4542 | 0,5737 |
 
-### Četvrti eksperiment — dijagnostička analiza
+Prikazane su prosječne vrijednosti kroz tri seed vrijednosti, uz klasifikacijske pragove odabrane na validaciji.
 
-Četvrti eksperiment bio je usmjeren na ispitivanje uzroka slabije generalizacije modela u kasnijim vremenskim koracima. Analizirane su distribucije predikcijskih skorova, osjetljivost na klasifikacijske pragove, Precision@K i Recall@K metrike, kalibracija predikcija, promjene ulaznih karakteristika kroz vrijeme i struktura transakcijskog grafa.
+Optimizacija je naročito poboljšala precision MLP i GraphSAGE modela. Ipak, povećanje ukupnih metrika ne znači nužno da su poboljšanja jednako prisutna u svim vremenskim periodima.
 
-Rezultati su pokazali da se slabija uspješnost u periodu 43–49 ne može objasniti samo izborom klasifikacijskog praga. Kod sva tri modela značajno se pogoršava i kvalitet rangiranja nezakonitih transakcija. XGBoost, naprimjer, u koraku 42 ostvaruje PR-AUC od 0,8976, dok u objedinjenom periodu 43–49 postiže samo 0,0524.
+### Vremenska generalizacija
 
-Posebno su izražene promjene karakteristika nezakonitih transakcija. Poređenjem trening perioda i koraka 43–49 utvrđeno je da 150 od 182 karakteristike ima KS statistiku veću od 0,2. To ukazuje na moguće promjene obrazaca nezakonitih transakcija kroz vrijeme, koje mogu otežavati generalizaciju modela.
+Najvažniji nalaz petog eksperimenta jeste da se poboljšanja neuronskih modela najvećim dijelom odnose na **vremenski korak 42**, dok je kvalitet klasifikacije u periodu 43–49 i dalje veoma nizak.
 
-Analiza grafovske strukture potvrdila je da se svih 234.355 veza nalazi unutar pojedinačnih vremenskih koraka, bez direktnih veza između različitih perioda. Dodatno su vizualizovana tri visokorizična lokalna podgrafa, s ciljem pregleda povezanosti i zastupljenosti neoznačenih transakcija.
+| Model | PR-AUC korak 42 | PR-AUC koraci 43–49 |
+|---|---:|---:|
+| XGBoost | 0,8966 | 0,0516 |
+| MLP | 0,8868 | 0,0416 |
+| GraphSAGE (2 sloja) | 0,8828 | 0,0358 |
+| GraphSAGE (3 sloja) | 0,8912 | 0,0360 |
 
-#### Evaluacija na dodatnim hronološkim podjelama
+U periodu 43–49 nalazi se 169 označenih nezakonitih transakcija, a udio pozitivne klase iznosi približno 2,53%.
 
-Sva tri modela ponovo su trenirana na tri različite vremenske podjele, uz zadržavanje početnih arhitektura i hiperparametara:
+Iako svi optimizovani modeli ostvaruju Precision@100 od 1,00 na kompletnom testnom periodu, svih 100 najbolje rangiranih transakcija pripada koraku 42. Kada se Precision@100 računa samo za korake 43–49, rezultati su znatno slabiji.
 
-| Podjela | Trening | Validacija | XGBoost PR-AUC | GraphSAGE PR-AUC | MLP PR-AUC |
-|---|---|---|---:|---:|---:|
-| A | 1–20 | 21–27 | **0,8617** | 0,6321 | 0,6648 |
-| B | 1–27 | 28–34 | **0,9806** | 0,8315 | 0,6938 |
-| C | 1–34 | 35–41 | **0,9341** | 0,5384 | 0,7294 |
+Ovi nalazi pokazuju da **optimizacija karakteristika, predobrade i hiperparametara značajno poboljšava neuronske modele, ali ne rješava problem vremenske generalizacije**.
 
-XGBoost je ostvario najbolje rezultate u sve tri podjele, dok je GraphSAGE pokazao najveće oscilacije. Rezultati nisu pokazali jednostavan trend kontinuiranog pogoršanja kroz vrijeme, ali su potvrdili da postoje pojedinačni vremenski koraci u kojima sva tri modela postižu znatno slabije rezultate.
+### Zaključak petog eksperimenta
 
-Dobijeni nalazi predstavljaju osnovu za naredne eksperimente, koji će se usmjeriti na ablacijske analize karakteristika, drugačiju predobradu podataka i kontrolisanu optimizaciju modela.
+Peti eksperiment pokazao je da početno slabiji rezultati neuronskih mreža ne moraju biti posljedica same arhitekture. Odgovarajućom predobradom i podešavanjem hiperparametara MLP i GraphSAGE mogu ostvariti rezultate vrlo bliske XGBoost modelu.
+
+Posebno je potvrđena važnost kvantilske transformacije za neuronske modele i dužeg treniranja za GraphSAGE.
+
+Međutim, završna vremenska evaluacija pokazala je da visoki rezultati na razvojnim podjelama i prvom testnom koraku ne garantuju uspješnu detekciju nezakonitih transakcija u kasnijim periodima.
+
+Problem vremenske generalizacije ostaje otvoren i predstavlja jednu od glavnih motivacija za nastavak istraživanja.
 
 ## Pokretanje
 
-Preporučeno okruženje je **Google Colab**. Nakon povezivanja Google Drivea, pređi u korijen projekta (folder koji sadrži `pyproject.toml`) i instaliraj zavisnosti:
+Preporučeno okruženje je **Google Colab**.
+
+Nakon povezivanja Google Drivea, potrebno je otvoriti korijen projekta, odnosno direktorij koji sadrži `pyproject.toml`, i instalirati zavisnosti:
 
 ```python
 from google.colab import drive
-drive.mount('/content/drive')
+drive.mount("/content/drive")
+
 %cd /content/drive/MyDrive/fingraph-ai/FinGraph_AI_MPVI_Starter
 %pip install -e ".[gnn]"
 ```
-
-Prije pokretanja faze 02 potrebno je imati originalne CSV datoteke i rezultate prethodnih eksperimenata u `outputs/xgboost/` i `outputs/graphsage/`.
 
 Osnovne komande iz korijena projekta:
 
@@ -128,52 +288,113 @@ python -m fingraph.gnn --data-dir data/raw --epochs 60 --hidden-dim 64
 python -m fingraph.mlp --data-dir data/raw
 ```
 
-U Colab ćeliji pokretanje CLI komandi zahtijeva prefiks `!`. Za vremensku analizu i zajedničko poređenje rezultata pokrenuti `notebooks/02_temporal_evaluation_and_baselines.ipynb` redom. Notebook čita postojeće predikcije i trenira samo novi MLP model.
+Za reprodukciju pojedinačnih eksperimenata potrebno je redom pokretati odgovarajuće notebookove.
+
+### Četvrti eksperiment
+
+Notebook:
+
+```text
+notebooks/03_phase04_diagnostics.ipynb
+```
+
+Sadrži dijagnostiku vremenske generalizacije i mogućnost dodatnog treniranja početnih modela kroz tri hronološke podjele.
 
 Rezultati se spremaju u:
 
-- `outputs/xgboost/` — XGBoost metrike i testne predikcije;
-- `outputs/graphsage/` — GraphSAGE metrike, predikcije i težine modela;
-- `outputs/mlp_v1/` — MLP metrike, predikcije, historija treniranja i checkpoint;
-- `outputs/eda/` — grafikoni i tabele eksplorativne analize;
-- `outputs/phase02/` — vremenske metrike, uporedne tabele, grafikoni i JSON sažetak.
-
-Folderi `data/raw/` i `outputs/` isključeni su iz Git repozitorija. Za detaljnije upute za posljednju fazu pogledati `docs/FAZA_02_UPUTSTVO.md`.
-
-Za dijagnostičku analizu pokrenuti `notebooks/03_phase04_diagnostics.ipynb` u Google Colabu. Notebook koristi originalni Elliptic++ dataset i prethodno sačuvane predikcije sva tri modela.
-
-Eksperiment uključuje analizu vremenskih promjena, predikcijskih skorova, klasifikacijskih pragova, kalibracije, grafovske strukture i visokorizičnih podgrafova. Dodatno je omogućeno ponovno treniranje početnih konfiguracija modela na tri hronološke podjele.
-
-Ponovljena treniranja uključuju se pomoću sljedećih postavki:
-
-```python
-RUN_ROLLING_XGBOOST = True
-RUN_ROLLING_MLP = True
-RUN_ROLLING_GRAPHSAGE = True
+```text
+outputs/phase04_diagnostics/
 ```
 
-Svi rezultati spremaju se u `outputs/phase04_diagnostics/`, uključujući tabele, grafikone, podgrafove i rezultate dodatnih treniranja u direktoriju `rolling_runs/`.
+Detaljnija dokumentacija dostupna je u `docs/README_EXPERIMENT_04.md`.
 
-Detaljniji opis metodologije i rezultata nalazi se u `docs/README_EXPERIMENT_04.md`.
+### Peti eksperiment
+
+Notebook:
+
+```text
+notebooks/04_phase05_ablation_preprocessing_tuning.ipynb
+```
+
+Obuhvata:
+
+1. Ablacijsku analizu ulaznih karakteristika.
+2. Ispitivanje alternativnih postupaka predobrade.
+3. Kombinovanje konfiguracija i provjeru stabilnosti kroz seed vrijednosti.
+4. Ciljano podešavanje hiperparametara.
+5. Završnu evaluaciju optimizovanih modela i poređenje s početnim rezultatima.
+
+Pojedine faze imaju vlastite kontrolne varijable, pa se već završena treniranja mogu preskočiti prilikom ponovnog izvršavanja notebooka.
+
+Glavni rezultati petog eksperimenta spremaju se u:
+
+```text
+outputs/phase05/
+├── runs/
+├── tables/
+└── phaseC_final_test/
+    ├── runs/
+    ├── tables/
+    └── phase05_c4_manifest.json
+```
+
+U direktoriju završne evaluacije nalaze se pojedinačne testne predikcije, metrike po vremenskim periodima, historije treniranja i zbirna poređenja s početnim modelima.
+
+Među najvažnijim izlaznim tabelama su:
+
+```text
+phase05_c4_all_test_metrics.csv
+phase05_c4_summary.csv
+phase05_c4_per_step.csv
+phase05_c4_original_models_detailed.csv
+phase05_c4_vs_original_models.csv
+```
+
+Rezultati se mogu arhivirati u `phase05_C4_final_test_results.zip` radi daljnje analize i dokumentovanja.
+
+### Izlazni direktoriji
+
+| Direktorij | Sadržaj |
+|---|---|
+| `outputs/xgboost/` | Početni XGBoost rezultati |
+| `outputs/graphsage/` | Početni GraphSAGE rezultati |
+| `outputs/mlp_v1/` | Početni MLP rezultati |
+| `outputs/eda/` | EDA grafikoni i tabele |
+| `outputs/phase02/` | Vremenska evaluacija i poređenja modela |
+| `outputs/phase04_diagnostics/` | Dijagnostika i hronološke podjele |
+| `outputs/phase05/` | Ablacije, predobrada, tuning i završna evaluacija |
+
+Direktoriji `data/raw/` i `outputs/` nisu uključeni u Git repozitorij.
 
 ## Testovi
+
+Testovi se pokreću iz korijena projekta:
 
 ```bash
 python -m unittest discover -s tests -v
 ```
 
-Testovi provjeravaju učitavanje podataka, oznake, vremensku podjelu, poravnanje predikcija i osnovno treniranje MLP-a na sintetičkim podacima; ne zahtijevaju originalni Elliptic++ dataset.
+Testovi obuhvataju provjere učitavanja i obrade podataka, oznaka klasa, hronoloških podjela, poravnanja predikcija i osnovnog izvršavanja pojedinih modela na sintetičkim podacima.
 
 ## Daljnji rad
 
-Naredna faza projekta usmjerena je na unapređenje postojećih modela na osnovu rezultata dijagnostičke analize. Planirana je ablacijska analiza lokalnih i agregiranih karakteristika, ispitivanje smanjenja dimenzionalnosti pomoću PCA, testiranje alternativnih postupaka predobrade podataka i kontrolisano podešavanje hiperparametara XGBoost, GraphSAGE i MLP modela.
+Nakon petog eksperimenta naredni istraživački pravac jeste proširenje postojećeg transakcijskog grafa informacijama iz **Elliptic++ Actors dataseta**.
 
-Posebna pažnja bit će posvećena stabilnosti rezultata kroz različite hronološke podjele, kako bi se utvrdilo mogu li se smanjiti problemi generalizacije na kasnije vremenske periode.
+Planirano je konstruisanje heterogenog grafa koji povezuje Bitcoin transakcije i adrese, uz poređenje nekoliko grafovskih arhitektura:
 
-U narednim fazama razmotrit će se i proširenje postojećeg transakcijskog grafa podacima o Bitcoin adresama iz Elliptic++ Actors dataseta te primjena hibridnih i self-supervised pristupa.
+- postojećeg GraphSAGE modela koji koristi samo Transactions graf;
+- heterogenog GraphSAGE modela koji koristi Transactions i Actors podatke;
+- naprednijeg heterogenog ili hibridnog grafovskog modela koji uključuje attention mehanizam;
+- potencijalne kombinacije grafovskih reprezentacija i XGBoost klasifikatora.
+
+Glavno istraživačko pitanje jeste može li dodatni kontekst povezanih Bitcoin adresa poboljšati klasifikaciju nezakonitih transakcija i njihovu stabilnost kroz vrijeme.
+
+Posebna pažnja bit će posvećena provjeri vremenske dostupnosti Actors karakteristika i sprečavanju korištenja budućih informacija (*temporal data leakage*).
+
+Dodatni pravac istraživanja obuhvata vremenski prilagodljive modele, periodično ponovno treniranje i metode koje omogućavaju prilagođavanje promjenama distribucija transakcija.
 
 ## Reference
 
-- [Elliptic++ — dataset i kod](https://github.com/git-disl/EllipticPlusPlus)
-- [Elmougy i Liu (2023), KDD](https://doi.org/10.1145/3580305.3599803)
-- [Weber et al. (2019), AML i GCN](https://arxiv.org/abs/1908.02591)
+- [Elliptic++ — dataset i izvorni kod](https://github.com/git-disl/EllipticPlusPlus)
+- [Elmougy i Liu (2023), Demystifying Fraudulent Transactions and Illicit Nodes in the Bitcoin Network for Financial Forensics](https://doi.org/10.1145/3580305.3599803)
+- [Weber et al. (2019), Anti-Money Laundering in Bitcoin: Experimenting with Graph Convolutional Networks for Financial Forensics](https://arxiv.org/abs/1908.02591)
